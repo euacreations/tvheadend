@@ -24,9 +24,37 @@ func NewChannelService(repo *database.Repository) *ChannelService {
 	}
 }
 
-func (s *ChannelService) GetAllChannels(ctx context.Context) ([]models.Channel, error) {
-	// Implement your database query here
-	return nil, nil
+func (s *ChannelService) GetAllChannels(ctx context.Context) ([]*models.Channel, error) {
+	channels, err := s.repo.GetAllChannels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve channels: %w", err)
+	}
+
+	// Get states for all channels
+	for _, channel := range channels {
+		state, err := s.repo.GetChannelState(ctx, channel.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get state for channel %d: %w", channel.ID, err)
+		}
+		channel.State = state
+	}
+
+	return channels, nil
+}
+
+func (s *ChannelService) GetChannel(ctx context.Context, id int) (*models.Channel, error) {
+	channel, err := s.repo.GetChannelByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get channel: %w", err)
+	}
+
+	state, err := s.repo.GetChannelState(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get channel state: %w", err)
+	}
+	channel.State = state
+
+	return channel, nil
 }
 
 func (s *ChannelService) CheckChannelStatus(ctx context.Context, channelID int) (bool, error) {

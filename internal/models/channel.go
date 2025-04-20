@@ -11,7 +11,7 @@ type Channel struct {
 	StartTime              time.Time
 	Enabled                bool
 	UsePreviousDayFallback bool
-	State                  *ChannelState
+	State                  *ChannelState // Add this field
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }

@@ -67,6 +67,45 @@ func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
 	return nil
 }
 
+func (s *Streamer) StartWithOverlays(ctx context.Context, config StreamConfig, overlayArgs []string) error {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+
+	if s.running {
+		return fmt.Errorf("stream is already running")
+	}
+
+	baseArgs := []string{
+		"-hwaccel", "cuda",
+		"-i", config.InputPath,
+		"-c:v", config.VideoCodec,
+		"-b:v", config.VideoBitrate,
+		"-minrate", config.MinBitrate,
+		"-maxrate", config.MaxBitrate,
+		"-bufsize", config.BufferSize,
+	}
+
+	args := append(baseArgs, overlayArgs...)
+	args = append(args, "-f", "mpegts", config.OutputURL)
+
+	s.cmd = exec.CommandContext(ctx, "ffmpeg", args...)
+	if err := s.cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start FFmpeg: %w", err)
+	}
+
+	s.running = true
+	s.pid = s.cmd.Process.Pid
+
+	go func() {
+		_ = s.cmd.Wait()
+		s.mux.Lock()
+		s.running = false
+		s.mux.Unlock()
+	}()
+
+	return nil
+}
+
 func (s *Streamer) Stop() error {
 	s.mux.Lock()
 	defer s.mux.Unlock()
