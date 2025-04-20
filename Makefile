@@ -17,3 +17,9 @@ test:
 
 clean:
 	rm -rf $(BIN_DIR)
+
+migrate-up:
+	$(GO) run cmd/migrate/main.go up
+
+migrate-down:
+	$(GO) run cmd/migrate/main.go down
