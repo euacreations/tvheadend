@@ -371,6 +371,53 @@ CREATE TABLE schema_migrations (
     UNIQUE INDEX idx_migration_name (migration_name)
 );
 
+CREATE TABLE IF NOT EXISTS playlists (
+    playlist_id INT AUTO_INCREMENT PRIMARY KEY,
+    channel_id INT NOT NULL,
+    playlist_date DATE COMMENT 'For daily playlists',
+    status ENUM('scheduled', 'active', 'completed') DEFAULT 'scheduled',
+    total_duration_seconds INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (channel_id) REFERENCES channels(channel_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS playlist_items (
+    item_id INT AUTO_INCREMENT PRIMARY KEY,
+    playlist_id INT NOT NULL,
+    media_id INT NOT NULL,
+    position INT NOT NULL COMMENT 'Order in playlist',
+    scheduled_start_time DATETIME,
+    scheduled_end_time DATETIME,
+    actual_start_time DATETIME,
+    actual_end_time DATETIME,
+    locked BOOLEAN DEFAULT FALSE COMMENT 'Lock item to prevent modifications',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (playlist_id) REFERENCES playlists(playlist_id) ON DELETE CASCADE,
+    FOREIGN KEY (media_id) REFERENCES media_files(media_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_playlist_channel ON playlists(channel_id);
+CREATE INDEX idx_playlist_items ON playlist_items(playlist_id, position);
+
+CREATE TABLE IF NOT EXISTS overlays (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    channel_id INT NOT NULL,
+    type ENUM('image', 'text') NOT NULL,
+    file_path VARCHAR(255),
+    position_x INT NOT NULL DEFAULT 0,
+    position_y INT NOT NULL DEFAULT 0,
+    enabled BOOLEAN DEFAULT TRUE,
+    font_size INT DEFAULT 24,
+    font_color VARCHAR(20) DEFAULT 'white',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (channel_id) REFERENCES channels(channel_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_overlay_channel ON overlays(channel_id);
+
 -- Create views for easier reporting
 
 -- View for active channels with their current status

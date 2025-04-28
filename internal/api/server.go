@@ -40,6 +40,7 @@ func (s *Server) setupRoutes() {
 	api := s.router.Group("/api/v1")
 	{
 		api.GET("/channels", s.listChannels)
+		api.GET("/channels/:id/", s.getChannel)
 		api.POST("/channels/:id/start", s.startChannel)
 		api.POST("/channels/:id/stop", s.stopChannel)
 		api.GET("/channels/:id/status", s.channelStatus)
