@@ -82,8 +82,8 @@ func (a *Application) startBackgroundServices() {
 		}
 
 		for _, channel := range channels {
-			if err := a.mediaScanner.ScanChannelMedia(context.Background(), channel.ID); err != nil {
-				log.Printf("Failed to scan media for channel %d: %v", channel.ID, err)
+			if err := a.mediaScanner.ScanChannelMedia(context.Background(), channel.ChannelID); err != nil {
+				log.Printf("Failed to scan media for channel %d: %v", channel.ChannelID, err)
 			}
 		}
 	}

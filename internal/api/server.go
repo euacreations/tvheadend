@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 
@@ -40,12 +41,14 @@ func (s *Server) setupRoutes() {
 	api := s.router.Group("/api/v1")
 	{
 		api.GET("/channels", s.listChannels)
-		api.GET("/channels/:id/", s.getChannel)
+		api.GET("/channels/:id", s.getChannel)
 		api.POST("/channels/:id/start", s.startChannel)
 		api.POST("/channels/:id/stop", s.stopChannel)
 		api.GET("/channels/:id/status", s.channelStatus)
 		api.POST("/channels/:id/scan", s.scanMedia)
-		api.GET("/playlists/:id", s.getPlaylist)
+		api.GET("/channels/:id/playlists", s.getPlaylists)
+		//api.GET("/channels/:id/playlists/:playlistId", s.getPlaylist)
+		api.GET("/channels/:id/media", s.getMediaFiles)
 		api.POST("/overlays", s.createOverlay)
 	}
 }
@@ -156,7 +159,7 @@ func (s *Server) createOverlay(c *gin.Context) {
 	c.JSON(http.StatusCreated, created)
 }
 
-func (s *Server) getPlaylist(c *gin.Context) {
+func (s *Server) getPlaylist1(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid playlist ID"})
@@ -179,4 +182,186 @@ func (s *Server) getPlaylist(c *gin.Context) {
 		"playlist": playlist,
 		"items":    items,
 	})
+}
+
+func (s *Server) getPlaylists(c *gin.Context) {
+
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid channel ID"})
+		return
+	}
+
+	// Check if the channel exists
+	_, err = s.channelService.GetChannel(c.Request.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Channel not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+
+	// Fetch the playlists
+	playlists, err := s.PlaylistExecutor.GetPlaylists(c.Request.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Playlist not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, playlists)
+
+}
+
+func (s *Server) getPlaylist(c *gin.Context) {
+
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid channel ID"})
+		return
+	}
+
+	playlistID, err := strconv.Atoi(c.Param("playlistId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid playlist ID"})
+		return
+	}
+
+	// Check if the channel exists
+	channel, err := s.channelService.GetChannel(c.Request.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Channel not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+
+	// Fetch the playlist
+	playlist, err := s.PlaylistExecutor.GetPlaylist(c.Request.Context(), playlistID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Playlist not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+
+	// Verify that the playlist belongs to the specified channel
+	if playlist.ChannelID != id {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "Playlist does not belong to the specified channel",
+		})
+		return
+	}
+
+	// Fetch playlist items
+	items, err := s.PlaylistExecutor.GetPlaylistItems(c.Request.Context(), playlistID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to fetch playlist items: " + err.Error(),
+		})
+		return
+	}
+
+	// Add items to the playlist
+	//playlist.Items = items
+
+	// Return successful response with the playlist data
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"playlist": playlist,
+			"channel":  channel,
+			"items":    items,
+		},
+	})
+}
+
+func (s *Server) getMediaFiles(c *gin.Context) {
+
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid channel ID"})
+		return
+	}
+
+	// Check if the channel exists
+	_, err = s.channelService.GetChannel(c.Request.Context(), id)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Channel not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+
+	// Fetch the Media Files
+
+	mediafiles, err := s.PlaylistExecutor.GetMediaFiles(c.Request.Context(), id)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Media Files not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+	// Return successful response with the playlist data
+	c.JSON(http.StatusOK, mediafiles)
+
+	/*c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"channel":    channel,
+			"mediafiles": mediafiles,
+		},
+	})*/
 }

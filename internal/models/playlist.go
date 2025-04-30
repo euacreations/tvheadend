@@ -3,25 +3,26 @@ package models
 import "time"
 
 type Playlist struct {
-	ID                   int        `json:"id"`
-	ChannelID            int        `json:"channel_id"`
-	PlaylistDate         *time.Time `json:"playlist_date"` // NULL for infinite playlists
-	Status               string     `json:"status"`        // scheduled, active, completed
-	TotalDurationSeconds int        `json:"total_duration_seconds"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	PlaylistID           int        `db:"playlist_id" json:"playlist_id"`
+	ChannelID            int        `db:"channel_id" json:"channel_id"`
+	PlaylistName         int        `db:"playlist_name" json:"playlist_name"`
+	PlaylistDate         *time.Time `db:"playlist_date" json:"playlist_date"` // NULL for infinite playlists
+	Status               string     `db:"status" json:"status"`               // scheduled, active, completed
+	TotalDurationSeconds int        `db:"total_duration_seconds" json:"total_duration_seconds"`
+	CreatedAt            time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt            time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type PlaylistItem struct {
-	ID                 int        `json:"id"`
-	PlaylistID         int        `json:"playlist_id"`
-	MediaID            int        `json:"media_id"`
-	Position           int        `json:"position"`
-	ScheduledStartTime *time.Time `json:"scheduled_start_time"`
-	ScheduledEndTime   *time.Time `json:"scheduled_end_time"`
-	ActualStartTime    *time.Time `json:"actual_start_time"`
-	ActualEndTime      *time.Time `json:"actual_end_time"`
-	Locked             bool       `json:"locked"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ItemID             int        `db:"item_id" json:"item_id"`
+	PlaylistID         int        `db:"playlist_id" json:"playlist_id"`
+	MediaID            int        `db:"media_id" json:"media_id"`
+	Position           int        `db:"position" json:"position"`
+	ScheduledStartTime *time.Time `db:"scheduled_start_time" json:"scheduled_start_time"`
+	ScheduledEndTime   *time.Time `db:"scheduled_end_time" json:"scheduled_end_time"`
+	ActualStartTime    *time.Time `db:"actual_start_time" json:"actual_start_time"`
+	ActualEndTime      *time.Time `db:"actual_end_time" json:"actual_end_time"`
+	Locked             bool       `db:"locked" json:"locked"`
+	CreatedAt          time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time  `db:"updated_at" json:"updated_at"`
 }

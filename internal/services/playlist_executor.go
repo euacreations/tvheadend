@@ -26,6 +26,16 @@ func NewPlaylistExecutor(repo *database.Repository, ffmpeg *ffmpeg.Streamer) *Pl
 	}
 }
 
+func (e *PlaylistExecutor) GetPlaylists(ctx context.Context, channelID int) ([]*models.Playlist, error) {
+	playlist, err := e.repo.GetPlaylists(ctx, channelID)
+	if err != nil {
+		fmt.Println("failed to get playlists: %w", err)
+	}
+	fmt.Println(playlist)
+
+	return playlist, err
+}
+
 func (e *PlaylistExecutor) GetPlaylist(ctx context.Context, playlistID int) (*models.Playlist, error) {
 	return e.repo.GetPlaylist(ctx, playlistID)
 }
@@ -40,7 +50,7 @@ func (e *PlaylistExecutor) Execute(ctx context.Context, channelID int) error {
 		return fmt.Errorf("failed to get active playlist: %w", err)
 	}
 
-	items, err := e.GetPlaylistItems(ctx, playlist.ID)
+	items, err := e.GetPlaylistItems(ctx, playlist.PlaylistID)
 	if err != nil {
 		return fmt.Errorf("failed to get playlist items: %w", err)
 	}
@@ -64,7 +74,7 @@ func (e *PlaylistExecutor) executeItem(ctx context.Context, channelID int, item 
 	state := &models.ChannelState{
 		ChannelID:         channelID,
 		CurrentPlaylistID: item.PlaylistID,
-		CurrentItemID:     item.ID,
+		CurrentItemID:     item.ItemID,
 		CurrentPosition:   0,
 		Running:           true,
 		LastUpdateTime:    time.Now(),
@@ -105,6 +115,12 @@ func (e *PlaylistExecutor) executeItem(ctx context.Context, channelID int, item 
 	}
 
 	return e.ffmpeg.Start(ctx, config)
+}
+
+func (e *PlaylistExecutor) GetMediaFiles(ctx context.Context, channelID int) ([]*models.MediaFile, error) {
+	return e.repo.GetMediaFiles(ctx, channelID)
+	//fmt.Println("Debug:", channelID)
+	//return nil, fmt.Errorf("not implemented")
 }
 
 func (e *PlaylistExecutor) getMediaFile(ctx context.Context, mediaID int) (*models.MediaFile, error) {

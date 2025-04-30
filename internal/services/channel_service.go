@@ -29,12 +29,12 @@ func (s *ChannelService) GetAllChannels(ctx context.Context) ([]*models.Channel,
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve channels: %w", err)
 	}
-
 	// Get states for all channels
 	for _, channel := range channels {
-		state, err := s.repo.GetChannelState(ctx, channel.ID)
+		state, err := s.repo.GetChannelState(ctx, channel.ChannelID)
+
 		if err != nil {
-			return nil, fmt.Errorf("failed to get state for channel %d: %w", channel.ID, err)
+			return nil, fmt.Errorf("failed to get state for channel %d: %w", channel.ChannelID, err)
 		}
 		channel.State = state
 	}
