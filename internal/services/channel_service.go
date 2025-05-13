@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -12,15 +13,17 @@ import (
 )
 
 type ChannelService struct {
-	repo      *database.Repository
-	streamers map[int]*ffmpeg.Streamer
-	streamMux sync.Mutex
+	repo             *database.Repository
+	playlistExecutor *PlaylistExecutor
+	streamers        map[int]*ffmpeg.Streamer
+	streamMux        sync.Mutex
 }
 
 func NewChannelService(repo *database.Repository) *ChannelService {
 	return &ChannelService{
-		repo:      repo,
-		streamers: make(map[int]*ffmpeg.Streamer),
+		repo:             repo,
+		streamers:        make(map[int]*ffmpeg.Streamer),
+		playlistExecutor: NewPlaylistExecutor(repo, ffmpeg.New()),
 	}
 }
 
@@ -73,41 +76,98 @@ func (s *ChannelService) StartChannel(ctx context.Context, channelID int) error 
 
 	s.streamMux.Lock()
 	defer s.streamMux.Unlock()
-
 	if _, exists := s.streamers[channelID]; exists {
 		return fmt.Errorf("channel %d is already running", channelID)
 	}
 
 	streamer := ffmpeg.New()
-	config := ffmpeg.StreamConfig{
-		InputPath:    channel.StorageRoot + "/current_stream.ts",
-		OutputURL:    channel.OutputUDP,
-		VideoCodec:   "hevc_nvenc",
-		VideoBitrate: "800k",
-		MinBitrate:   "800k",
-		MaxBitrate:   "800k",
-		BufferSize:   "1600k",
-	}
-
-	if err := streamer.Start(ctx, config); err != nil {
-		return fmt.Errorf("failed to start stream: %w", err)
-	}
-
 	s.streamers[channelID] = streamer
 
-	state := &models.ChannelState{
-		ChannelID:      channelID,
-		Running:        true,
-		FFmpegPID:      streamer.PID(),
-		LastUpdateTime: time.Now(),
+	streamer.SetProgressCallback(func(position float64) {
+		state := &models.ChannelState{
+			ChannelID:       channelID,
+			Running:         true,
+			CurrentPosition: position,
+			LastUpdateTime:  time.Now(),
+			FFmpegPID:       streamer.PID(),
+		}
+		if err := s.repo.UpdateChannelState(context.Background(), state); err != nil {
+			log.Printf("Failed to update channel state: %v", err)
+		}
+	})
+
+	switch channel.PlaylistType {
+	case "daily_playlist":
+		executor := NewPlaylistExecutor(s.repo, streamer)
+
+		go func() {
+			if err := executor.Execute(context.Background(), channel); err != nil {
+				log.Printf("PlaylistExecutor error: %v", err)
+				// Clean up on error
+				s.streamMux.Lock()
+				delete(s.streamers, channelID)
+				s.streamMux.Unlock()
+			}
+		}()
+
+		// go func() {
+		// 	if err := s.playlistExecutor.Execute(context.Background(), channel); err != nil {
+		// 		log.Printf("PlaylistExecutor error: %v", err)
+		// 	}
+		// }()
+
+		// if err := s.playlistExecutor.Execute(ctx, channel); err != nil {
+		// 	return fmt.Errorf("failed to start daily playlist: %w", err)
+		// }
+
+	default:
+		// Default behavior (existing code)
+		return s.startDefaultStream(ctx, channel)
 	}
 
-	if err := s.repo.UpdateChannelState(ctx, state); err != nil {
-		_ = streamer.Stop()
-		delete(s.streamers, channelID)
-		return fmt.Errorf("failed to update channel state: %w", err)
-	}
+	/*
+	   streamer := ffmpeg.New()
 
+	   	config := ffmpeg.StreamConfig{
+	   		InputPath:    channel.StorageRoot + "/media/CH-02/Nagaran/Nagaran-01.mp4",
+	   		OutputURL:    channel.OutputUDP,
+	   		VideoCodec:   "hevc_nvenc",
+	   		VideoBitrate: "800k",
+	   		MinBitrate:   "800k",
+	   		MaxBitrate:   "800k",
+	   		BufferSize:   "1600k",
+	   	}
+
+	   //fmt.Println(config)
+
+	   	if err := streamer.Start(ctx, config); err != nil {
+	   		return fmt.Errorf("failed to start stream: %w", err)
+	   	}
+
+	   s.streamers[channelID] = streamer
+
+	   	state := &models.ChannelState{
+	   		ChannelID:      channelID,
+	   		Running:        true,
+	   		FFmpegPID:      streamer.PID(),
+	   		LastUpdateTime: time.Now(),
+	   	}
+
+	   //fmt.Println("Channel state:", state)
+	   // Update channel state in the database
+
+	   	if err := s.repo.UpdateChannelState(ctx, state); err != nil {
+	   		_ = streamer.Stop()
+	   		delete(s.streamers, channelID)
+	   		return fmt.Errorf("failed to update channel state: %w", err)
+	   	}
+	*/
+	return nil
+
+}
+
+func (s *ChannelService) startDefaultStream(ctx context.Context, channel *models.Channel) error {
+	// Existing code to start a single stream
 	return nil
 }
 

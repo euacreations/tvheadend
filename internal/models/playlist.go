@@ -5,7 +5,7 @@ import "time"
 type Playlist struct {
 	PlaylistID           int        `db:"playlist_id" json:"playlist_id"`
 	ChannelID            int        `db:"channel_id" json:"channel_id"`
-	PlaylistName         int        `db:"playlist_name" json:"playlist_name"`
+	PlaylistName         string     `db:"playlist_name" json:"playlist_name"`
 	PlaylistDate         *time.Time `db:"playlist_date" json:"playlist_date"` // NULL for infinite playlists
 	Status               string     `db:"status" json:"status"`               // scheduled, active, completed
 	TotalDurationSeconds int        `db:"total_duration_seconds" json:"total_duration_seconds"`

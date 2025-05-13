@@ -46,7 +46,7 @@ func buildImageOverlayArgs(overlay *models.Overlay) []string {
 
 func buildTextOverlayArgs(overlay *models.Overlay, text string) []string {
 	return []string{
-		"-vf", fmt.Sprintf("drawtext=text='%s':x=%d:y=%d:fontsize=%d:fontcolor=%s",
+		"-vf", fmt.Sprintf("drawtext=text='%s':x=%s:y=%s:fontsize=%s:fontcolor=%s",
 			text, overlay.PositionX, overlay.PositionY, overlay.FontSize, overlay.FontColor),
 	}
 }
@@ -69,12 +69,12 @@ func (s *OverlayService) CreateOverlay(ctx context.Context, overlay *models.Over
 	}
 
 	// Set defaults
-	if overlay.PositionX == 0 && overlay.PositionY == 0 {
-		overlay.PositionX = 10
-		overlay.PositionY = 10
+	if overlay.PositionX == "" && overlay.PositionY == "" {
+		overlay.PositionX = "10"
+		overlay.PositionY = "10"
 	}
-	if overlay.FontSize == 0 {
-		overlay.FontSize = 24
+	if overlay.FontSize == "" {
+		overlay.FontSize = "24"
 	}
 	if overlay.FontColor == "" {
 		overlay.FontColor = "white"

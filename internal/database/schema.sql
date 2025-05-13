@@ -184,7 +184,7 @@ CREATE TABLE channel_states (
     channel_id INT NOT NULL,
     current_playlist_id INT,
     current_item_id INT,
-    current_position_seconds FLOAT DEFAULT 0,
+    current_position FLOAT DEFAULT 0,
     last_update_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     ffmpeg_pid INT COMMENT 'Process ID of FFmpeg instance',
     running BOOLEAN DEFAULT FALSE,
@@ -432,7 +432,7 @@ SELECT
     p.playlist_id,
     p.playlist_date,
     p.status AS playlist_status,
-    cs.current_position_seconds,
+    cs.current_position ,
     cs.last_update_time,
     mf.program_name AS current_program_name
 FROM 
@@ -627,7 +627,7 @@ BEGIN
         running,
         current_playlist_id,
         current_item_id,
-        current_position_seconds,
+        current_position,
         error_message,
         last_update_time
     ) VALUES (
@@ -642,7 +642,7 @@ BEGIN
         running = VALUES(running),
         current_playlist_id = VALUES(current_playlist_id),
         current_item_id = VALUES(current_item_id),
-        current_position_seconds = VALUES(current_position_seconds),
+        current_position = VALUES(current_position),
         error_message = VALUES(error_message),
         last_update_time = VALUES(last_update_time);
     

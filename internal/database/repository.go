@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,10 +18,11 @@ type Repository struct {
 }
 
 func NewRepository(cfg *config.Config) (*Repository, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&loc=Asia%%2FColombo",
 		cfg.DBUser, cfg.DBPassword, cfg.DBHost, cfg.DBPort, cfg.DBName)
 
 	db, err := sqlx.Open("mysql", dsn)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -92,19 +95,20 @@ func (r *Repository) GetChannelState(ctx context.Context, channelID int) (*model
 
 func (r *Repository) UpdateChannelState(ctx context.Context, state *models.ChannelState) error {
 	query := `INSERT INTO channel_states 
-        (channel_id, current_playlist_id, current_item_id, current_position_seconds, 
+        (channel_id, current_playlist_id, current_item_id, current_position, 
         running, ffmpeg_pid, last_update_time) 
-        VALUES (:channel_id, :current_playlist_id, :current_item_id, :current_position_seconds, 
+        VALUES (:channel_id, :current_playlist_id, :current_item_id, :current_position, 
         :running, :ffmpeg_pid, :last_update_time)
         ON DUPLICATE KEY UPDATE 
         current_playlist_id = VALUES(current_playlist_id),
         current_item_id = VALUES(current_item_id),
-        current_position_seconds = VALUES(current_position_seconds),
+        current_position = VALUES(current_position),
         running = VALUES(running),
         ffmpeg_pid = VALUES(ffmpeg_pid),
         last_update_time = VALUES(last_update_time)`
 
 	// Use NamedExecContext to automatically map struct fields to named parameters
+
 	_, err := r.db.NamedExecContext(ctx, query, state)
 	if err != nil {
 		return fmt.Errorf("failed to update channel state: %w", err)
@@ -137,8 +141,8 @@ func (r *Repository) CreateMediaFile(ctx context.Context, file *models.MediaFile
 	return err
 }
 
-func (r *Repository) GetMediaFiles(ctx context.Context, channelID int) ([]*models.MediaFile, error) {
-	query := `SELECT media_id, channel_id, file_path, file_name, duration_seconds, 
+/*func (r *Repository) GetMediaFiles(ctx context.Context, channelID int) ([]*models.MediaFile, error) {
+	query := `SELECT media_id, channel_id, file_path, file_name, duration_seconds,
             program_name, file_size, last_modified, scanned_at, created_at, updated_at
 			FROM media_files WHERE channel_id = ?`
 
@@ -149,6 +153,42 @@ func (r *Repository) GetMediaFiles(ctx context.Context, channelID int) ([]*model
 	}
 	return mf, nil
 
+}*/
+
+func (r *Repository) GetMediaFiles(ctx context.Context, channelID int, page, pageSize int) ([]*models.MediaFile, error) {
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10 // Default page size
+	}
+
+	offset := (page - 1) * pageSize
+
+	query := `SELECT media_id, channel_id, file_path, file_name, duration_seconds, 
+            program_name, file_size, last_modified, scanned_at, created_at, updated_at
+            FROM media_files 
+            WHERE channel_id = ?
+            LIMIT ? OFFSET ?`
+
+	var mf []*models.MediaFile
+	err := r.db.SelectContext(ctx, &mf, query, channelID, pageSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	return mf, nil
+}
+
+func (r *Repository) CountMediaFiles(ctx context.Context, channelID int) (int, error) {
+	query := `SELECT COUNT(*) FROM media_files WHERE channel_id = ?`
+
+	var count int
+	err := r.db.GetContext(ctx, &count, query, channelID)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (r *Repository) GetMediaFile(ctx context.Context, mediaID int) (*models.MediaFile, error) {
@@ -156,12 +196,12 @@ func (r *Repository) GetMediaFile(ctx context.Context, mediaID int) (*models.Med
             program_name, file_size, last_modified, scanned_at, created_at, updated_at
 			FROM media_files WHERE media_id = ?`
 
-	var mf *models.MediaFile
-	err := r.db.SelectContext(ctx, &mf, query, mediaID)
+	var mf models.MediaFile
+	err := r.db.GetContext(ctx, &mf, query, mediaID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get media file with ID %d: %w", mediaID, err)
 	}
-	return mf, nil
+	return &mf, nil
 
 }
 
@@ -258,4 +298,114 @@ func (r *Repository) CreateOverlay(ctx context.Context, overlay *models.Overlay)
 		&overlay.CreatedAt,
 		&overlay.UpdatedAt,
 	)
+}
+
+/*New Func*/
+
+func (r *Repository) GetPlaylistForDate(ctx context.Context, channelID int, PlaylistDate time.Time) (*models.Playlist, error) {
+	//now := time.Now()
+	//today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	var playlist models.Playlist
+	query := `SELECT * FROM playlists 
+              WHERE channel_id = ? 
+              AND (playlist_date = ? OR playlist_date IS NULL)
+              
+              ORDER BY playlist_date DESC
+              LIMIT 1`
+
+	err := r.db.GetContext(ctx, &playlist, query, channelID, PlaylistDate.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	return &playlist, nil
+}
+
+// GetNextPlaylistForChannel gets the next day's playlist
+func (r *Repository) GetNextPlaylistForChannel(ctx context.Context, channelID int) (*models.Playlist, error) {
+	now := time.Now()
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+
+	var playlist models.Playlist
+	query := `SELECT * FROM playlists 
+              WHERE channel_id = ? 
+              AND playlist_date = ?
+              AND status = 'scheduled'
+              LIMIT 1`
+
+	err := r.db.GetContext(ctx, &playlist, query, channelID, tomorrow)
+	if err != nil {
+		return nil, err
+	}
+	return &playlist, nil
+}
+
+// GetCurrentAndNextPlaylistItems gets the current playing item and next queued item
+func (r *Repository) GetCurrentAndNextPlaylistItems(ctx context.Context, playlistID int) (*models.PlaylistItem, *models.PlaylistItem, error) {
+	now := time.Now()
+
+	// Get current playing item (where scheduled_start_time <= now < scheduled_end_time)
+	var currentItem models.PlaylistItem
+	currentQuery := `SELECT * FROM playlist_items 
+                    WHERE playlist_id = ? 
+                    AND scheduled_start_time <= ? 
+                    AND scheduled_end_time > ?
+                    AND locked = true
+                    LIMIT 1`
+
+	err := r.db.GetContext(ctx, &currentItem, currentQuery, playlistID, now, now)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, err
+	}
+
+	// Get next item (first unlocked item after current item)
+	var nextItem models.PlaylistItem
+	nextQuery := `SELECT * FROM playlist_items 
+                 WHERE playlist_id = ? 
+                 AND position > ?
+                 AND locked = false
+                 ORDER BY position ASC
+                 LIMIT 1`
+
+	var position int
+	if currentItem.ItemID > 0 {
+		position = currentItem.Position
+	} else {
+		// If no current item, get first item
+		position = -1
+	}
+
+	err = r.db.GetContext(ctx, &nextItem, nextQuery, playlistID, position)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, err
+	}
+
+	// If we're at the end of the playlist, loop to beginning
+	if nextItem.ItemID == 0 {
+		loopQuery := `SELECT * FROM playlist_items 
+                     WHERE playlist_id = ? 
+                     AND locked = false
+                     ORDER BY position ASC
+                     LIMIT 1`
+		err = r.db.GetContext(ctx, &nextItem, loopQuery, playlistID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, err
+		}
+	}
+
+	return &currentItem, &nextItem, nil
+}
+
+// LockPlaylistItem marks an item as locked (currently playing or queued)
+func (r *Repository) LockPlaylistItem(ctx context.Context, itemID int) error {
+	query := `UPDATE playlist_items SET locked = true WHERE item_id = ?`
+	_, err := r.db.ExecContext(ctx, query, itemID)
+	return err
+}
+
+// UnlockPlaylistItem marks an item as unlocked
+func (r *Repository) UnlockPlaylistItem(ctx context.Context, itemID int) error {
+	query := `UPDATE playlist_items SET locked = false WHERE item_id = ?`
+	_, err := r.db.ExecContext(ctx, query, itemID)
+	return err
 }

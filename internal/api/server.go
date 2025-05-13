@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"math"
 	"net/http"
 	"strconv"
 
@@ -42,7 +43,7 @@ func (s *Server) setupRoutes() {
 	{
 		api.GET("/channels", s.listChannels)
 		api.GET("/channels/:id", s.getChannel)
-		api.POST("/channels/:id/start", s.startChannel)
+		api.GET("/channels/:id/start", s.startChannel)
 		api.POST("/channels/:id/stop", s.stopChannel)
 		api.GET("/channels/:id/status", s.channelStatus)
 		api.POST("/channels/:id/scan", s.scanMedia)
@@ -310,6 +311,7 @@ func (s *Server) getPlaylist(c *gin.Context) {
 	})
 }
 
+/*
 func (s *Server) getMediaFiles(c *gin.Context) {
 
 	id, err := strconv.Atoi(c.Param("id"))
@@ -357,11 +359,77 @@ func (s *Server) getMediaFiles(c *gin.Context) {
 	// Return successful response with the playlist data
 	c.JSON(http.StatusOK, mediafiles)
 
-	/*c.JSON(http.StatusOK, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
 			"channel":    channel,
 			"mediafiles": mediafiles,
 		},
-	})*/
+	})
+}
+
+*/
+
+func (s *Server) getMediaFiles(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid channel ID"})
+		return
+	}
+
+	// Get pagination parameters from query string
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "10"))
+
+	// Check if the channel exists
+	_, err = s.channelService.GetChannel(c.Request.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Channel not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+
+	// Get paginated media files
+	mediafiles, err := s.PlaylistExecutor.GetMediaFiles(c.Request.Context(), id, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+
+	// Get total count for pagination metadata
+	total, err := s.PlaylistExecutor.CountMediaFiles(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Database error: " + err.Error(),
+		})
+		return
+	}
+
+	// Calculate total pages
+	totalPages := int(math.Ceil(float64(total) / float64(pageSize)))
+
+	// Return response with pagination metadata
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    mediafiles,
+		"pagination": gin.H{
+			"total":        total,
+			"total_pages":  totalPages,
+			"current_page": page,
+			"page_size":    pageSize,
+		},
+	})
 }

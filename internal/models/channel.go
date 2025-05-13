@@ -16,6 +16,8 @@ type Channel struct {
 	VideoBitrate            string        `json:"video_bitrate" db:"video_bitrate"`
 	MinBitrate              string        `json:"min_bitrate" db:"min_bitrate"`
 	MaxBitrate              string        `json:"max_bitrate" db:"max_bitrate"`
+	AudioCodec              string        `json:"audio_codec" db:"audio_codec"`
+	AudioBitrate            string        `json:"audio_bitrate" db:"audio_bitrate"`
 	BufferSize              string        `json:"buffer_size" db:"buffer_size"`
 	PacketSize              int           `json:"packet_size" db:"packet_size"`
 	OutputResolution        string        `json:"output_resolution" db:"output_resolution"`
