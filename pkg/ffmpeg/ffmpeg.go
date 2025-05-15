@@ -17,6 +17,7 @@ import (
 type StreamConfig struct {
 	// Core Parameters
 	InputPath   string
+	InputType   models.PlaylistItemType
 	OutputURL   string
 	StartOffset time.Duration
 	Duration    time.Duration
@@ -81,9 +82,19 @@ func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
 		"-filter_hw_device", "cu",
 		"-hwaccel", "cuda",
 		"-hwaccel_output_format", "cuda",
-		"-re",
 	}
 
+	// Use -f mpegts and -async for UDP input format
+	if config.InputType == models.PlaylistItemTypeUDP {
+		args = append(args, "-f", "mpegts")
+		args = append(args, "-async", "30")
+
+	} else if config.InputType == models.PlaylistItemTypeMedia {
+		args = append(args, "-re") // Use -re for file input to simulate real-time
+
+	}
+
+	// Place -ss and -t before -i for faster input-level seek/truncate
 	// Add start offset if specified
 	if config.StartOffset > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.2f", config.StartOffset.Seconds()))
@@ -112,6 +123,17 @@ func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
 		"-maxrate", config.MaxBitrate,
 		"-bufsize", config.BufferSize,
 	)
+
+	args = append(args, "-preset", "p1") // p1 is fastest (ultrafast), p7 is slowest/best quality
+	args = append(args, "-tune", "ull")  // Tune for ultra-low latency
+	args = append(args, "-rc", "cbr")    // Use constant bitrate for predictable bandwidth
+
+	args = append(args, "-g", "60")           // GOP size (2 sec at 30 fps)
+	args = append(args, "-keyint_min", "60")  // Minimum GOP size
+	args = append(args, "-sc_threshold", "0") // Disable scene-change triggers for keyframes
+
+	args = append(args, "-r", "30") // Output frame rate
+
 	// Audio encoding parameters
 	args = append(args,
 		"-c:a", config.AudioCodec,
@@ -120,8 +142,8 @@ func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
 
 	if len(config.Overlays) > 0 {
 		args = append(args, "-filter_complex", s.buildOverlayFilter(config.Overlays, config.OutputResolution))
+		args = append(args, "-map", "[outv]", "-map", "0:a")
 	}
-	args = append(args, "-map", "[outv]", "-map", "0:a")
 
 	// MPEG-TS parameters
 	args = append(args,

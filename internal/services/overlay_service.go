@@ -40,7 +40,7 @@ func (s *OverlayService) ApplyOverlays(ctx context.Context, channelID int, ffmpe
 func buildImageOverlayArgs(overlay *models.Overlay) []string {
 	return []string{
 		"-i", overlay.FilePath,
-		"-filter_complex", fmt.Sprintf("[0:v][1:v]overlay=%d:%d", overlay.PositionX, overlay.PositionY),
+		//"-filter_complex", fmt.Sprintf("[0:v][1:v]overlay=%d:%d", overlay.PositionX, overlay.PositionY),
 	}
 }
 

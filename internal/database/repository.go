@@ -191,7 +191,7 @@ func (r *Repository) CountMediaFiles(ctx context.Context, channelID int) (int, e
 	return count, nil
 }
 
-func (r *Repository) GetMediaFile(ctx context.Context, mediaID int) (*models.MediaFile, error) {
+func (r *Repository) GetMediaFile(ctx context.Context, mediaID sql.NullInt64) (*models.MediaFile, error) {
 	query := `SELECT media_id, channel_id, file_path, file_name, duration_seconds, 
             program_name, file_size, last_modified, scanned_at, created_at, updated_at
 			FROM media_files WHERE media_id = ?`
@@ -199,10 +199,21 @@ func (r *Repository) GetMediaFile(ctx context.Context, mediaID int) (*models.Med
 	var mf models.MediaFile
 	err := r.db.GetContext(ctx, &mf, query, mediaID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media file with ID %d: %w", mediaID, err)
+		return nil, fmt.Errorf("failed to get media file with ID %d: %w", mediaID.Int64, err)
 	}
 	return &mf, nil
+}
 
+func (r *Repository) GetUDPStream(ctx context.Context, streamID sql.NullInt64) (*models.UDPStream, error) {
+	query := `SELECT * FROM udp_streams WHERE stream_id = ?`
+
+	var stream models.UDPStream
+
+	err := r.db.GetContext(ctx, &stream, query, streamID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get udp stream with ID %d: %w", streamID.Int64, err)
+	}
+	return &stream, nil
 }
 
 func (r *Repository) GetPlaylists(ctx context.Context, channelID int) ([]*models.Playlist, error) {
@@ -256,6 +267,7 @@ func (r *Repository) GetPlaylistItems(ctx context.Context, playlistID int) ([]*m
 
 	var items []*models.PlaylistItem
 	err := r.db.SelectContext(ctx, &items, query, playlistID)
+	fmt.Println("Error : ", err)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +317,7 @@ func (r *Repository) CreateOverlay(ctx context.Context, overlay *models.Overlay)
 func (r *Repository) GetPlaylistForDate(ctx context.Context, channelID int, PlaylistDate time.Time) (*models.Playlist, error) {
 	//now := time.Now()
 	//today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-
+	fmt.Println("Playlist Date", PlaylistDate.Format("2006-01-02"))
 	var playlist models.Playlist
 	query := `SELECT * FROM playlists 
               WHERE channel_id = ? 
@@ -318,6 +330,7 @@ func (r *Repository) GetPlaylistForDate(ctx context.Context, channelID int, Play
 	if err != nil {
 		return nil, err
 	}
+
 	return &playlist, nil
 }
 

@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -17,7 +19,7 @@ import (
 type PlaylistExecutor struct {
 	repo       *database.Repository
 	ffmpeg     *ffmpeg.Streamer
-	mediaCache map[int]*models.MediaFile
+	mediaCache map[sql.NullInt64]*models.MediaFile
 	cacheMux   sync.RWMutex
 	//positionUpdateMux sync.Mutex
 	currentState struct {
@@ -36,10 +38,9 @@ func NewPlaylistExecutor(repo *database.Repository, ffmpeg *ffmpeg.Streamer) *Pl
 	return &PlaylistExecutor{
 		repo:       repo,
 		ffmpeg:     ffmpeg,
-		mediaCache: make(map[int]*models.MediaFile),
+		mediaCache: make(map[sql.NullInt64]*models.MediaFile),
 	}
 }
-
 func (e *PlaylistExecutor) Execute(ctx context.Context, channel *models.Channel) error {
 	if err := e.initializePlaylist(ctx, channel); err != nil {
 		return fmt.Errorf("playlist initialization failed: %w", err)
@@ -54,32 +55,71 @@ func (e *PlaylistExecutor) Execute(ctx context.Context, channel *models.Channel)
 			// Calculate time until next day's playlist starts
 			nextDayStart := calculateNextDayStart(time.Now(), channel.StartTime)
 			timeUntilTransition := time.Until(nextDayStart)
-
 			currentItem := e.currentState.items[e.currentState.currentIndex]
 
-			media, err := e.getMediaFile(ctx, currentItem.MediaID)
-			if err != nil {
-				return fmt.Errorf("media lookup failed: %w", err)
+			// Get duration based on item type
+			var maxDuration int
+			var inputPath string
+			//var startOffset int
+			var err error
+
+			switch currentItem.Type {
+			case models.PlaylistItemTypeMedia:
+				media, err := e.getMediaFile(ctx, currentItem.MediaID)
+				if err != nil {
+					return fmt.Errorf("media lookup failed: %w", err)
+				}
+				inputPath = filepath.Join(channel.StorageRoot, "media", media.FilePath)
+				maxDuration = media.DurationSeconds
+				//startOffset = e.currentState.startOffset
+
+			case models.PlaylistItemTypeUDP:
+				if !currentItem.StreamID.Valid {
+					return fmt.Errorf("invalid stream ID for UDP item")
+				}
+				stream, err := e.repo.GetUDPStream(ctx, currentItem.StreamID)
+				if err != nil {
+					return fmt.Errorf("stream lookup failed: %w", err)
+				}
+				inputPath = stream.StreamURL
+
+				// Calculate effective duration
+				originalOffset := e.currentState.startOffset
+				if stream.DurationSeconds != nil {
+					// Finite stream: remaining duration = total duration - offset
+					maxDuration = *stream.DurationSeconds - originalOffset
+					if maxDuration < 0 {
+						maxDuration = 0
+					}
+				} else {
+					// Infinite stream: duration = time until transition - offset
+					maxDuration = int(timeUntilTransition.Seconds()) - originalOffset
+					if maxDuration < 0 {
+						maxDuration = 0
+					}
+				}
+				e.currentState.startOffset = 0
+				//startOffset = 0
+
+				// Final safety check
+				if maxDuration < 0 {
+					maxDuration = 0
+				}
+
 			}
 
-			// Compute max duration for current item
-			maxDuration := media.DurationSeconds
-			if timeUntilTransition < time.Duration(media.DurationSeconds)*time.Second {
+			// Cap duration at time until transition
+			if timeUntilTransition < time.Duration(maxDuration)*time.Second {
 				maxDuration = int(timeUntilTransition.Seconds())
 			}
 
-			// --- Track FFmpeg Progress ---
-			//go e.trackFFmpegProgress(ctx, channel)
-
-			// --- Queue Next Item While Playing Current ---
+			// Queue next item while playing current
 			prepDone := make(chan struct{})
 			go func() {
 				defer close(prepDone)
-
-				// Unlock current
 				e.unlockItem(currentItem)
 
-				// Re-fetch playlist if needed (optional - avoid if unchanged)
+				// Re-fetch playlist if needed
 				items, err := e.repo.GetPlaylistItems(ctx, e.currentState.playlist.PlaylistID)
 				if err == nil && len(items) > 0 {
 					e.currentState.items = items
@@ -91,8 +131,8 @@ func (e *PlaylistExecutor) Execute(ctx context.Context, channel *models.Channel)
 				e.lockItem(e.currentState.items[nextIndex])
 			}()
 
-			// --- Play Current Item (Blocking) ---
-			err = e.playItem(ctx, channel, currentItem, e.currentState.startOffset, maxDuration)
+			// Play current item
+			err = e.playItem(ctx, channel, currentItem, inputPath, e.currentState.startOffset, maxDuration)
 			e.currentState.startOffset = 0
 
 			<-prepDone // Ensure next item was prepared
@@ -109,45 +149,11 @@ func (e *PlaylistExecutor) Execute(ctx context.Context, channel *models.Channel)
 				continue
 			}
 
-			// Set current = next
+			// Move to next item
 			e.currentState.currentIndex = e.currentState.nextIndex
 		}
 	}
 }
-
-// func (e *PlaylistExecutor) trackFFmpegProgress(ctx context.Context, channel *models.Channel) {
-// 	ticker := time.NewTicker(10 * time.Second)
-// 	defer ticker.Stop()
-
-// 	for {
-// 		select {
-// 		case <-ctx.Done():
-// 			return
-// 		case <-e.ffmpeg.Done():
-// 			return
-// 		case <-ticker.C:
-// 			pos := parseFFmpegProgress(e.ffmpeg.logBuffer)
-// 			//e.repo.UpdateChannelPosition(ctx, channel.ChannelID, pos)
-// 		}
-// 	}
-// }
-
-// var ffmpegTimeRegex = regexp.MustCompile(`time=(\d{2}:\d{2}:\d{2}\.\d{2})`)
-
-// func parseFFmpegProgress(logs string) float64 {
-// 	lines := strings.Split(logs, "\n")
-
-// 	// Search from bottom for latest time
-// 	for i := len(lines) - 1; i >= 0; i-- {
-// 		line := lines[i]
-// 		if match := ffmpegTimeRegex.FindStringSubmatch(line); match != nil {
-// 			if dur, err := time.ParseDuration(strings.Replace(match[1], ".", "s", 1) + "0ms"); err == nil {
-// 				return dur.Seconds()
-// 			}
-// 		}
-// 	}
-// 	return 0
-// }
 
 func (e *PlaylistExecutor) initializePlaylist(ctx context.Context, channel *models.Channel) error {
 	effectiveDate := calculateEffectiveDate(time.Now(), channel.StartTime)
@@ -181,7 +187,10 @@ func (e *PlaylistExecutor) initializePlaylist(ctx context.Context, channel *mode
 		return fmt.Errorf("empty playlist")
 	}
 
-	startIndex, startOffset := e.calculateStartPosition(ctx, items, effectiveDate, channel.StartTime)
+	fmt.Println("Effective Date:", effectiveDate)
+	fmt.Println("Channel Start Time:", channel.StartTime)
+
+	startIndex, startOffset := e.calculateStartPosition(ctx, items, effectiveDate)
 	//fmt.Printf("Starting playback from item %d with offset %d seconds\n", startIndex, startOffset)
 	e.currentState.playlist = playlist
 	e.currentState.items = items
@@ -198,9 +207,8 @@ func (e *PlaylistExecutor) initializePlaylist(ctx context.Context, channel *mode
 }
 
 func (e *PlaylistExecutor) playItem(ctx context.Context, channel *models.Channel,
-	item *models.PlaylistItem, offset int, maxDuration int) error {
+	item *models.PlaylistItem, inputPath string, offset int, maxDuration int) error {
 
-	//<-e.ffmpeg.Done()
 	e.currentState.streamMux.Lock()
 	defer e.currentState.streamMux.Unlock()
 
@@ -208,14 +216,10 @@ func (e *PlaylistExecutor) playItem(ctx context.Context, channel *models.Channel
 	e.ffmpeg.Reset()
 	e.ffmpeg.SetProgressCallback(nil)
 
-	media, err := e.getMediaFile(ctx, item.MediaID)
-	if err != nil {
-		return err
-	}
-
 	// Build FFmpeg config
 	config := ffmpeg.StreamConfig{
-		InputPath:               channel.StorageRoot + "media/" + media.FilePath,
+		InputPath:               inputPath,
+		InputType:               item.Type,
 		OutputURL:               channel.OutputUDP,
 		StartOffset:             time.Duration(offset) * time.Second,
 		Duration:                time.Duration(maxDuration) * time.Second,
@@ -242,7 +246,7 @@ func (e *PlaylistExecutor) playItem(ctx context.Context, channel *models.Channel
 	for _, overlay := range overlays {
 		config.Overlays = append(config.Overlays, models.Overlay{
 			Type:      overlay.Type,
-			FilePath:  channel.StorageRoot + "data/" + overlay.FilePath,
+			FilePath:  filepath.Join(channel.StorageRoot, "data", overlay.FilePath),
 			Text:      overlay.Text,
 			PositionX: overlay.PositionX,
 			PositionY: overlay.PositionY,
@@ -251,28 +255,22 @@ func (e *PlaylistExecutor) playItem(ctx context.Context, channel *models.Channel
 		})
 	}
 
-	program_name_overlay := models.Overlay{
-		Type:      "text",
-		Text:      media.ProgramName,
-		PositionX: "W/12",
-		PositionY: "H/12",
-		FontSize:  "H/45",
-		FontColor: "white",
-		FontFile:  channel.StorageRoot + "data/NotoSansSinhala-Regular.ttf",
+	// Add program name overlay if this is a media file
+	if item.Type == models.PlaylistItemTypeMedia {
+		media, err := e.getMediaFile(ctx, item.MediaID)
+		if err == nil && media.ProgramName != "" {
+			programNameOverlay := models.Overlay{
+				Type:      "text",
+				Text:      media.ProgramName,
+				PositionX: "W/12",
+				PositionY: "H/12",
+				FontSize:  "H/45",
+				FontColor: "white",
+				FontFile:  filepath.Join(channel.StorageRoot, "data", "NotoSansSinhala-Regular.ttf"),
+			}
+			config.Overlays = append(config.Overlays, programNameOverlay)
+		}
 	}
-
-	// logo_overlay := models.Overlay{
-	// 	Type:      "image",
-	// 	Text:      media.ProgramName,
-	// 	PositionX: "0.8*W",
-	// 	PositionY: "H/12",
-	// 	FontSize:  "H/45",
-	// 	FontColor: "white",
-	// 	FilePath:  channel.StorageRoot + "data/tvl_movies_logo_90.png",
-	// }
-
-	config.Overlays = append(config.Overlays, program_name_overlay)
-	//config.Overlays = append(config.Overlays, logo_overlay)
 
 	// Create cancelable context
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -289,7 +287,6 @@ func (e *PlaylistExecutor) playItem(ctx context.Context, channel *models.Channel
 			FFmpegPID:         e.ffmpeg.PID(),
 		}
 
-		// Update DB (optional: add throttling if needed)
 		if err := e.repo.UpdateChannelState(context.Background(), state); err != nil {
 			log.Printf("Failed to update position: %v", err)
 		}
@@ -322,7 +319,6 @@ func (e *PlaylistExecutor) playItem(ctx context.Context, channel *models.Channel
 	case <-e.ffmpeg.Done():
 		return nil
 	}
-	//return nil
 }
 
 func (e *PlaylistExecutor) transitionToNextPlaylist(ctx context.Context, channel *models.Channel) error {
@@ -373,7 +369,7 @@ func (e *PlaylistExecutor) unlockItem(item *models.PlaylistItem) {
 	_ = e.repo.UnlockPlaylistItem(context.Background(), item.ItemID)
 }
 
-func (e *PlaylistExecutor) getMediaFile(ctx context.Context, mediaID int) (*models.MediaFile, error) {
+func (e *PlaylistExecutor) getMediaFile(ctx context.Context, mediaID sql.NullInt64) (*models.MediaFile, error) {
 	e.cacheMux.RLock()
 	if media, exists := e.mediaCache[mediaID]; exists {
 		e.cacheMux.RUnlock()
@@ -429,7 +425,7 @@ func calculateNextDayStart(now time.Time, startTime time.Time) time.Time {
 }
 
 func (e *PlaylistExecutor) calculateStartPosition(ctx context.Context, items []*models.PlaylistItem,
-	playlistStart time.Time, channelStart time.Time) (int, int) {
+	playlistStart time.Time) (int, int) {
 
 	elapsed := time.Since(playlistStart)
 	if elapsed < 0 {
@@ -438,12 +434,35 @@ func (e *PlaylistExecutor) calculateStartPosition(ctx context.Context, items []*
 
 	totalDuration := 0
 	for _, item := range items {
-		media, err := e.getMediaFile(ctx, item.MediaID)
-		if err != nil {
-			return 0, 0
+		var duration int
+
+		switch item.Type {
+		case models.PlaylistItemTypeMedia:
+			media, err := e.getMediaFile(ctx, item.MediaID)
+			if err != nil {
+				return 0, 0
+			}
+			duration = media.DurationSeconds
+
+		case models.PlaylistItemTypeUDP:
+			// Get UDP stream duration (NULL means infinite)
+			if item.StreamID.Valid {
+				stream, err := e.repo.GetUDPStream(ctx, item.StreamID)
+				if err != nil {
+					return 0, 0
+				}
+				if stream.DurationSeconds != nil {
+					duration = *stream.DurationSeconds
+				} else {
+					// Infinite stream - use remaining time in playlist
+					duration = 24 * 3600 // Max 24 hours
+				}
+			} else {
+				duration = 24 * 3600 // Default to 24 hours if stream ID is invalid
+			}
 		}
 
-		totalDuration += media.DurationSeconds
+		totalDuration += duration
 	}
 
 	positionSec := int(elapsed.Seconds()) % (24 * 3600)
@@ -453,24 +472,84 @@ func (e *PlaylistExecutor) calculateStartPosition(ctx context.Context, items []*
 
 	accumulated := 0
 	for i, item := range items {
-		media, err := e.getMediaFile(ctx, item.MediaID)
-		if err != nil {
-			return 0, 0
+		var duration int
+
+		switch item.Type {
+		case models.PlaylistItemTypeMedia:
+			media, err := e.getMediaFile(ctx, item.MediaID)
+			if err != nil {
+				return 0, 0
+			}
+			duration = media.DurationSeconds
+
+		case models.PlaylistItemTypeUDP:
+			if item.StreamID.Valid {
+				stream, err := e.repo.GetUDPStream(ctx, item.StreamID)
+				if err != nil {
+					return 0, 0
+				}
+				if stream.DurationSeconds != nil {
+					duration = *stream.DurationSeconds
+				} else {
+					duration = 24 * 3600
+				}
+			} else {
+				duration = 24 * 3600
+			}
 		}
 
-		if accumulated+media.DurationSeconds > positionSec {
+		if accumulated+duration > positionSec {
 			return i, positionSec - accumulated
 		}
-		accumulated += media.DurationSeconds
+		accumulated += duration
 	}
 
 	return 0, 0
 }
 
+// func (e *PlaylistExecutor) calculateStartPosition(ctx context.Context, items []*models.PlaylistItem,
+// 	playlistStart time.Time) (int, int) {
+
+// 	elapsed := time.Since(playlistStart)
+// 	if elapsed < 0 {
+// 		return 0, 0
+// 	}
+
+// 	totalDuration := 0
+// 	for _, item := range items {
+// 		media, err := e.getMediaFile(ctx, item.MediaID)
+// 		if err != nil {
+// 			return 0, 0
+// 		}
+
+// 		totalDuration += media.DurationSeconds
+// 	}
+
+// 	positionSec := int(elapsed.Seconds()) % (24 * 3600)
+// 	if totalDuration > 0 {
+// 		positionSec %= totalDuration
+// 	}
+
+// 	accumulated := 0
+// 	for i, item := range items {
+// 		media, err := e.getMediaFile(ctx, item.MediaID)
+// 		if err != nil {
+// 			return 0, 0
+// 		}
+
+// 		if accumulated+media.DurationSeconds > positionSec {
+// 			return i, positionSec - accumulated
+// 		}
+// 		accumulated += media.DurationSeconds
+// 	}
+
+// 	return 0, 0
+// }
+
 func (e *PlaylistExecutor) GetPlaylists(ctx context.Context, channelID int) ([]*models.Playlist, error) {
 	playlist, err := e.repo.GetPlaylists(ctx, channelID)
 	if err != nil {
-		fmt.Errorf("failed to get playlists: %w", err)
+		return nil, fmt.Errorf("failed to get playlists: %w", err)
 	}
 
 	return playlist, err

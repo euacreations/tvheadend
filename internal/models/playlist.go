@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 type Playlist struct {
 	PlaylistID           int        `db:"playlist_id" json:"playlist_id"`
@@ -13,16 +16,39 @@ type Playlist struct {
 	UpdatedAt            time.Time  `db:"updated_at" json:"updated_at"`
 }
 
+// type PlaylistItem struct {
+// 	ItemID             int        `db:"item_id" json:"item_id"`
+// 	PlaylistID         int        `db:"playlist_id" json:"playlist_id"`
+// 	MediaID            int        `db:"media_id" json:"media_id"`
+// 	Position           int        `db:"position" json:"position"`
+// 	ScheduledStartTime *time.Time `db:"scheduled_start_time" json:"scheduled_start_time"`
+// 	ScheduledEndTime   *time.Time `db:"scheduled_end_time" json:"scheduled_end_time"`
+// 	ActualStartTime    *time.Time `db:"actual_start_time" json:"actual_start_time"`
+// 	ActualEndTime      *time.Time `db:"actual_end_time" json:"actual_end_time"`
+// 	Locked             bool       `db:"locked" json:"locked"`
+// 	CreatedAt          time.Time  `db:"created_at" json:"created_at"`
+// 	UpdatedAt          time.Time  `db:"updated_at" json:"updated_at"`
+// }
+
+type PlaylistItemType string
+
+const (
+	PlaylistItemTypeMedia PlaylistItemType = "media"
+	PlaylistItemTypeUDP   PlaylistItemType = "udp"
+)
+
 type PlaylistItem struct {
-	ItemID             int        `db:"item_id" json:"item_id"`
-	PlaylistID         int        `db:"playlist_id" json:"playlist_id"`
-	MediaID            int        `db:"media_id" json:"media_id"`
-	Position           int        `db:"position" json:"position"`
-	ScheduledStartTime *time.Time `db:"scheduled_start_time" json:"scheduled_start_time"`
-	ScheduledEndTime   *time.Time `db:"scheduled_end_time" json:"scheduled_end_time"`
-	ActualStartTime    *time.Time `db:"actual_start_time" json:"actual_start_time"`
-	ActualEndTime      *time.Time `db:"actual_end_time" json:"actual_end_time"`
-	Locked             bool       `db:"locked" json:"locked"`
-	CreatedAt          time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt          time.Time  `db:"updated_at" json:"updated_at"`
+	ItemID             int              `db:"item_id" json:"item_id"`
+	PlaylistID         int              `db:"playlist_id" json:"playlist_id"`
+	MediaID            sql.NullInt64    `db:"media_id" json:"media_id"`   // Nullable for UDP items
+	StreamID           sql.NullInt64    `db:"stream_id" json:"stream_id"` // Nullable for Media Files
+	Type               PlaylistItemType `db:"type" json:"type"`
+	Position           int              `db:"position" json:"position"`
+	ScheduledStartTime *time.Time       `db:"scheduled_start_time" json:"scheduled_start_time"`
+	ScheduledEndTime   *time.Time       `db:"scheduled_end_time" json:"scheduled_end_time"`
+	ActualStartTime    *time.Time       `db:"actual_start_time" json:"actual_start_time"`
+	ActualEndTime      *time.Time       `db:"actual_end_time" json:"actual_end_time"`
+	Locked             bool             `db:"locked" json:"locked"`
+	CreatedAt          time.Time        `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time        `db:"updated_at" json:"updated_at"`
 }
