@@ -198,6 +198,9 @@ func (e *PlaylistExecutor) initializePlaylist(ctx context.Context, channel *mode
 	e.currentState.playlistStart = effectiveDate
 	e.currentState.startOffset = startOffset
 
+	//channel.ChannelID = playlist.PlaylistID
+	fmt.Println("Channel:", channel)
+
 	// Lock initial items
 	e.lockItem(items[startIndex])
 	e.currentState.nextIndex = (startIndex + 1) % len(items)
@@ -258,15 +261,15 @@ func (e *PlaylistExecutor) playItem(ctx context.Context, channel *models.Channel
 	// Add program name overlay if this is a media file
 	if item.Type == models.PlaylistItemTypeMedia {
 		media, err := e.getMediaFile(ctx, item.MediaID)
-		if err == nil && media.ProgramName != "" {
+		if err == nil && media.ProgramName.String != "" {
 			programNameOverlay := models.Overlay{
 				Type:      "text",
-				Text:      media.ProgramName,
+				Text:      media.ProgramName.String,
 				PositionX: "W/12",
 				PositionY: "H/12",
-				FontSize:  "H/45",
+				FontSize:  "H/30",
 				FontColor: "white",
-				FontFile:  filepath.Join(channel.StorageRoot, "data", "NotoSansSinhala-Regular.ttf"),
+				FontFile:  filepath.Join(channel.StorageRoot, "data", "FM-Malithi-x.ttf"),
 			}
 			config.Overlays = append(config.Overlays, programNameOverlay)
 		}
@@ -370,23 +373,30 @@ func (e *PlaylistExecutor) unlockItem(item *models.PlaylistItem) {
 }
 
 func (e *PlaylistExecutor) getMediaFile(ctx context.Context, mediaID sql.NullInt64) (*models.MediaFile, error) {
-	e.cacheMux.RLock()
-	if media, exists := e.mediaCache[mediaID]; exists {
+	useCache := os.Getenv("ENABLE_MEDIA_CACHE") == "true"
+
+	if useCache {
+		e.cacheMux.RLock()
+		if media, exists := e.mediaCache[mediaID]; exists {
+			e.cacheMux.RUnlock()
+			return media, nil
+		}
 		e.cacheMux.RUnlock()
-		return media, nil
 	}
-	e.cacheMux.RUnlock()
 
 	media, err := e.repo.GetMediaFile(ctx, mediaID)
 	if err != nil {
 		return nil, err
 	}
 
-	e.cacheMux.Lock()
-	e.mediaCache[mediaID] = media
-	e.cacheMux.Unlock()
+	if useCache {
+		e.cacheMux.Lock()
+		e.mediaCache[mediaID] = media
+		e.cacheMux.Unlock()
+	}
 
 	return media, nil
+
 }
 
 func (e *PlaylistExecutor) cleanup() {

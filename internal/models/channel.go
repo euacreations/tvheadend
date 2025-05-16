@@ -8,6 +8,7 @@ type Channel struct {
 	StorageRoot             string        `json:"storage_root" db:"storage_root"`
 	OutputUDP               string        `json:"output_udp" db:"output_udp"`
 	PlaylistType            string        `json:"playlist_type" db:"playlist_type"`
+	PlaylistID              int           `json:"playlist_id" db:"playlist_id"`
 	StartTimeStr            string        `json:"-" db:"start_time" `
 	StartTime               time.Time     `json:"start_time" db:"-" `
 	Enabled                 bool          `json:"enabled" db:"enabled"`

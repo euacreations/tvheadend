@@ -42,6 +42,98 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
+func (r *Repository) UpdateChannel(ctx context.Context, channel *models.Channel) error {
+	query := `
+		INSERT INTO channel (
+			channel_id,
+			channel_name,
+			storage_root,
+			output_udp,
+			playlist_type,
+			playlist_id,
+			start_time,
+			enabled,
+			use_previous_day_fallback,
+			video_codec,
+			video_bitrate,
+			min_bitrate,
+			max_bitrate,
+			audio_codec,
+			audio_bitrate,
+			buffer_size,
+			packet_size,
+			output_resolution,
+			mpegts_original_network_id,
+			mpegts_transport_stream_id,
+			mpegts_service_id,
+			mpegts_start_pid,
+			mpegts_pmt_start_pid,
+			metadata_service_provider,
+			created_at,
+			updated_at
+		) VALUES (
+			:channel_id,
+			:channel_name,
+			:storage_root,
+			:output_udp,
+			:playlist_type,
+			:playlist_id,
+			:start_time,
+			:enabled,
+			:use_previous_day_fallback,
+			:video_codec,
+			:video_bitrate,
+			:min_bitrate,
+			:max_bitrate,
+			:audio_codec,
+			:audio_bitrate,
+			:buffer_size,
+			:packet_size,
+			:output_resolution,
+			:mpegts_original_network_id,
+			:mpegts_transport_stream_id,
+			:mpegts_service_id,
+			:mpegts_start_pid,
+			:mpegts_pmt_start_pid,
+			:metadata_service_provider,
+			NOW(),
+			NOW()
+		)
+		ON DUPLICATE KEY UPDATE
+			channel_name = VALUES(channel_name),
+			storage_root = VALUES(storage_root),
+			output_udp = VALUES(output_udp),
+			playlist_type = VALUES(playlist_type),
+			playlist_id = VALUES(playlist_id),
+			start_time = VALUES(start_time),
+			enabled = VALUES(enabled),
+			use_previous_day_fallback = VALUES(use_previous_day_fallback),
+			video_codec = VALUES(video_codec),
+			video_bitrate = VALUES(video_bitrate),
+			min_bitrate = VALUES(min_bitrate),
+			max_bitrate = VALUES(max_bitrate),
+			audio_codec = VALUES(audio_codec),
+			audio_bitrate = VALUES(audio_bitrate),
+			buffer_size = VALUES(buffer_size),
+			packet_size = VALUES(packet_size),
+			output_resolution = VALUES(output_resolution),
+			mpegts_original_network_id = VALUES(mpegts_original_network_id),
+			mpegts_transport_stream_id = VALUES(mpegts_transport_stream_id),
+			mpegts_service_id = VALUES(mpegts_service_id),
+			mpegts_start_pid = VALUES(mpegts_start_pid),
+			mpegts_pmt_start_pid = VALUES(mpegts_pmt_start_pid),
+			metadata_service_provider = VALUES(metadata_service_provider),
+			updated_at = NOW()
+	`
+
+	// NamedExecContext uses struct field tags (db:"...") for parameter binding
+	_, err := r.db.NamedExecContext(ctx, query, channel)
+	if err != nil {
+		return fmt.Errorf("failed to insert/update channel: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) GetChannelByID(ctx context.Context, ChannelID int) (*models.Channel, error) {
 	query := `SELECT * FROM channels WHERE channel_id = ?`
 	var channel models.Channel
