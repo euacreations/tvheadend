@@ -187,9 +187,6 @@ func (e *PlaylistExecutor) initializePlaylist(ctx context.Context, channel *mode
 		return fmt.Errorf("empty playlist")
 	}
 
-	fmt.Println("Effective Date:", effectiveDate)
-	fmt.Println("Channel Start Time:", channel.StartTime)
-
 	startIndex, startOffset := e.calculateStartPosition(ctx, items, effectiveDate)
 	//fmt.Printf("Starting playback from item %d with offset %d seconds\n", startIndex, startOffset)
 	e.currentState.playlist = playlist
@@ -197,9 +194,6 @@ func (e *PlaylistExecutor) initializePlaylist(ctx context.Context, channel *mode
 	e.currentState.currentIndex = startIndex
 	e.currentState.playlistStart = effectiveDate
 	e.currentState.startOffset = startOffset
-
-	//channel.ChannelID = playlist.PlaylistID
-	fmt.Println("Channel:", channel)
 
 	// Lock initial items
 	e.lockItem(items[startIndex])

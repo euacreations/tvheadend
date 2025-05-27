@@ -52,21 +52,28 @@ func (a *Application) Start() error {
 	go a.startBackgroundServices()
 
 	// Start HTTP server
+
+	// Start all enabled channels
+	ctx := context.Background()
+	channels, err := a.channelService.GetAllChannels(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve channels: %w", err)
+	}
+
+	for _, ch := range channels {
+		if ch.Enabled {
+			go func(channelID int) {
+				if err := a.channelService.StartChannel(ctx, channelID); err != nil {
+					log.Printf("Failed to start channel %d: %v", channelID, err)
+				} else {
+					log.Printf("Channel %d started", channelID)
+				}
+			}(ch.ChannelID)
+		}
+	}
+
 	return a.server.Start(":" + strconv.Itoa(a.cfg.HTTPPort))
 
-	/*
-	   log.Println("Starting TV Headend Server...")
-
-	   	go func() {
-	   		addr := ":" + strconv.Itoa(a.cfg.HTTPPort)
-	   		log.Printf("HTTP server listening on %s", addr)
-	   		if err := a.server.Start(addr); err != nil && err != http.ErrServerClosed {
-	   			log.Fatalf("HTTP server error: %v", err)
-	   		}
-	   	}()
-
-	   return nil
-	*/
 }
 
 func (a *Application) startBackgroundServices() {

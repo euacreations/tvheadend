@@ -16,6 +16,7 @@ type ChannelService struct {
 	repo             *database.Repository
 	playlistExecutor *PlaylistExecutor
 	streamers        map[int]*ffmpeg.Streamer
+	executorCancels  map[int]context.CancelFunc
 	streamMux        sync.Mutex
 }
 
@@ -23,6 +24,7 @@ func NewChannelService(repo *database.Repository) *ChannelService {
 	return &ChannelService{
 		repo:             repo,
 		streamers:        make(map[int]*ffmpeg.Streamer),
+		executorCancels:  make(map[int]context.CancelFunc),
 		playlistExecutor: NewPlaylistExecutor(repo, ffmpeg.New()),
 	}
 }
@@ -58,6 +60,43 @@ func (s *ChannelService) GetChannel(ctx context.Context, id int) (*models.Channe
 	channel.State = state
 
 	return channel, nil
+}
+
+func (s *ChannelService) GetChannelStatus(ctx context.Context, channelID int) (*models.ChannelState, bool, error) {
+	// Get the current state from the database
+	state, err := s.repo.GetChannelState(ctx, channelID)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get channel state: %w", err)
+	}
+
+	// Check if the streamer is actually running in our application memory
+	s.streamMux.Lock()
+	streamer, isRunning := s.streamers[channelID]
+	s.streamMux.Unlock()
+
+	// If we have a streamer but the state says not running, update the state
+	if isRunning && !state.Running {
+		state.Running = true
+		state.FFmpegPID = streamer.PID()
+		state.LastUpdateTime = time.Now()
+
+		if err := s.repo.UpdateChannelState(ctx, state); err != nil {
+			return state, isRunning, fmt.Errorf("failed to update channel state: %w", err)
+		}
+	}
+
+	// If we don't have a streamer but state says running, update the state
+	if !isRunning && state.Running {
+		state.Running = false
+		state.FFmpegPID = 0
+		state.LastUpdateTime = time.Now()
+
+		if err := s.repo.UpdateChannelState(ctx, state); err != nil {
+			return state, isRunning, fmt.Errorf("failed to update channel state: %w", err)
+		}
+	}
+
+	return state, isRunning, nil
 }
 
 func (s *ChannelService) CheckChannelStatus(ctx context.Context, channelID int) (bool, error) {
@@ -99,20 +138,38 @@ func (s *ChannelService) StartChannel(ctx context.Context, channelID int) error 
 	switch channel.PlaylistType {
 	case "daily_playlist":
 		executor := NewPlaylistExecutor(s.repo, streamer)
+		executorCtx, cancel := context.WithCancel(context.Background())
+		s.executorCancels[channelID] = cancel
 
 		go func() {
-			if err := executor.Execute(context.Background(), channel); err != nil {
-				log.Printf("PlaylistExecutor error: %v", err)
-				// Clean up on error
+
+			defer func() {
+				// Clean up on exit
 				s.streamMux.Lock()
 				delete(s.streamers, channelID)
+				delete(s.executorCancels, channelID)
 				s.streamMux.Unlock()
+			}()
+
+			if err := executor.Execute(executorCtx, channel); err != nil {
+				// Only log error if it's not due to context cancellation
+				if err != context.Canceled {
+					log.Printf("PlaylistExecutor error: %v", err)
+				}
 			}
+			// if err := executor.Execute(context.Background(), channel); err != nil {
+			// 	log.Printf("PlaylistExecutor error: %v", err)
+			// 	// Clean up on error
+			// 	s.streamMux.Lock()
+			// 	delete(s.streamers, channelID)
+			// 	s.streamMux.Unlock()
+			// }
 		}()
 
 	default:
 		// Default behavior (existing code)
 		return s.startDefaultStream(ctx, channel)
+		//return nil
 	}
 
 	return nil
@@ -126,30 +183,42 @@ func (s *ChannelService) startDefaultStream(ctx context.Context, channel *models
 
 func (s *ChannelService) StopChannel(ctx context.Context, channelID int) error {
 	s.streamMux.Lock()
-	streamer, exists := s.streamers[channelID]
+	streamer, streamerExists := s.streamers[channelID]
+	cancel, cancelExists := s.executorCancels[channelID]
 	s.streamMux.Unlock()
 
-	if !exists {
+	if !streamerExists {
 		return fmt.Errorf("channel %d is not running", channelID)
+	}
+
+	streamer.SetProgressCallback(nil) // Disable further callbacks
+
+	if cancelExists {
+		cancel()
 	}
 
 	if err := streamer.Stop(); err != nil {
 		return fmt.Errorf("failed to stop stream: %w", err)
 	}
 
-	state := &models.ChannelState{
-		ChannelID:      channelID,
-		Running:        false,
-		FFmpegPID:      0,
-		LastUpdateTime: time.Now(),
+	// Retrieve the current state before modifying
+	currentState, err := s.repo.GetChannelState(ctx, channelID)
+	if err != nil {
+		return fmt.Errorf("failed to get current channel state: %w", err)
 	}
 
-	if err := s.repo.UpdateChannelState(ctx, state); err != nil {
+	currentState.Running = false
+	currentState.FFmpegPID = 0
+	currentState.LastUpdateTime = time.Now()
+
+	// Update the channel state in the database
+	if err := s.repo.UpdateChannelState(ctx, currentState); err != nil {
 		return fmt.Errorf("failed to update channel state: %w", err)
 	}
 
 	s.streamMux.Lock()
 	delete(s.streamers, channelID)
+	delete(s.executorCancels, channelID)
 	s.streamMux.Unlock()
 
 	return nil

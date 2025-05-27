@@ -3,6 +3,7 @@ package ffmpeg
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -60,13 +61,18 @@ type Streamer struct {
 	currentPosition float64
 	done            chan struct{}
 	onProgress      func(position float64)
+	stopOnce        sync.Once // Ensures cleanup happens only once
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 func New() *Streamer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Streamer{
-		done: make(chan struct{}),
+		done:   make(chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
 	}
-
 }
 
 func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
@@ -162,9 +168,8 @@ func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
 
 	args = append(args, "-progress", "pipe:2")
 
-	//fmt.Println("FFmpeg command:", args)
-
-	s.cmd = exec.CommandContext(context.Background(), "ffmpeg", args...)
+	// Use the streamer's context for the command
+	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", args...)
 
 	// Setup stderr log capture
 	stderrPipe, err := s.cmd.StderrPipe()
@@ -172,65 +177,12 @@ func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
 		return fmt.Errorf("failed to get FFmpeg stderr: %w", err)
 	}
 	s.currentPosition = 0
-	//s.logBuffer.Reset()
-	//s.startLogParser(stderrPipe)
 
-	go func() {
-		buf := make([]byte, 1024)
-		lineBuf := ""
+	// Progress parsing goroutine
+	go s.parseProgress(stderrPipe, config.StartOffset)
 
-		for {
-			n, err := stderrPipe.Read(buf)
-
-			if n > 0 {
-				lineBuf += string(buf[:n])
-
-				for {
-					idx := strings.Index(lineBuf, "\n")
-					if idx == -1 {
-						break
-					}
-					line := strings.TrimSpace(lineBuf[:idx])
-					lineBuf = lineBuf[idx+1:]
-
-					// Parse FFmpeg progress key=value lines
-					if strings.HasPrefix(line, "out_time=") {
-						timestamp := strings.TrimPrefix(line, "out_time=")
-						position, err := parseFFmpegTime(timestamp)
-						if err == nil {
-							s.mux.Lock()
-							s.currentPosition = position + config.StartOffset.Seconds() // <-- float64 in seconds
-							s.mux.Unlock()
-						}
-
-					}
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.mux.Lock()
-				position := s.currentPosition
-				s.mux.Unlock()
-
-				// Call back to update DB
-				if s.onProgress != nil {
-					s.onProgress(position)
-				}
-			case <-s.done:
-				return
-			}
-		}
-	}()
+	// Progress callback goroutine
+	go s.progressCallback()
 
 	if err := s.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start FFmpeg: %w", err)
@@ -239,34 +191,139 @@ func (s *Streamer) Start(ctx context.Context, config StreamConfig) error {
 	s.running = true
 	s.pid = s.cmd.Process.Pid
 
-	s.done = make(chan struct{})
-
-	go func() {
-		_ = s.cmd.Wait()
-		s.mux.Lock()
-		s.running = false
-		s.mux.Unlock()
-		close(s.done)
-	}()
+	// Process monitoring goroutine
+	go s.monitorProcess()
 
 	return nil
 }
 
+func (s *Streamer) parseProgress(stderrPipe io.ReadCloser, startOffset time.Duration) {
+	defer stderrPipe.Close()
+
+	buf := make([]byte, 1024)
+	lineBuf := ""
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
+		n, err := stderrPipe.Read(buf)
+
+		if n > 0 {
+			lineBuf += string(buf[:n])
+
+			for {
+				idx := strings.Index(lineBuf, "\n")
+				if idx == -1 {
+					break
+				}
+				line := strings.TrimSpace(lineBuf[:idx])
+				lineBuf = lineBuf[idx+1:]
+
+				// Parse FFmpeg progress key=value lines
+				if strings.HasPrefix(line, "out_time=") {
+					timestamp := strings.TrimPrefix(line, "out_time=")
+					position, err := parseFFmpegTime(timestamp)
+					if err == nil {
+						s.mux.Lock()
+						s.currentPosition = position + startOffset.Seconds()
+						s.mux.Unlock()
+					}
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+}
+
+func (s *Streamer) progressCallback() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.mux.Lock()
+			position := s.currentPosition
+			callback := s.onProgress
+			s.mux.Unlock()
+
+			// Call back to update DB
+			if callback != nil {
+				callback(position)
+			}
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *Streamer) monitorProcess() {
+	_ = s.cmd.Wait()
+
+	// Use sync.Once to ensure cleanup happens only once
+	s.stopOnce.Do(func() {
+		s.mux.Lock()
+		s.running = false
+		s.mux.Unlock()
+
+		// Close the done channel to signal completion
+		select {
+		case <-s.done:
+			// Channel already closed
+		default:
+			close(s.done)
+		}
+	})
+}
+
 func (s *Streamer) Reset() {
+	// Cancel the context to stop all goroutines
+	s.cancel()
+
 	s.mux.Lock()
 	defer s.mux.Unlock()
 
-	if s.running {
-		close(s.done) // Close the existing done channel
+	// Kill the process if it's running
+	if s.running && s.cmd != nil && s.cmd.Process != nil {
 		s.cmd.Process.Signal(syscall.SIGTERM)
+
+		// Give it a moment to terminate gracefully
+		time.Sleep(100 * time.Millisecond)
+
+		// Force kill if still running
+		if s.IsRunning() {
+			s.cmd.Process.Kill()
+		}
 	}
+
+	// Reset state
 	s.running = false
 	s.currentPosition = 0
 	s.logBuffer.Reset()
 	s.cmd = nil
 	s.pid = 0
-	s.onProgress = nil           // Clear the progress callback
-	s.done = make(chan struct{}) // Create a new done channel
+	s.onProgress = nil
+
+	// Ensure done channel is closed
+	s.stopOnce.Do(func() {
+		select {
+		case <-s.done:
+			// Channel already closed
+		default:
+			close(s.done)
+		}
+	})
+
+	// Create new context and channels for potential reuse
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.done = make(chan struct{})
+	s.stopOnce = sync.Once{}
 }
 
 func parseFFmpegTime(timeStr string) (float64, error) {
@@ -281,6 +338,8 @@ func parseFFmpegTime(timeStr string) (float64, error) {
 }
 
 func (s *Streamer) SetProgressCallback(callback func(position float64)) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	s.onProgress = callback
 }
 
@@ -353,7 +412,6 @@ func (s *Streamer) Stop() error {
 		return fmt.Errorf("failed to stop FFmpeg: %w", err)
 	}
 
-	s.running = false
 	return nil
 }
 

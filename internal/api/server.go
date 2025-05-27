@@ -48,7 +48,7 @@ func (s *Server) setupRoutes() {
 		api.GET("/channels/:id/status", s.channelStatus)
 		api.POST("/channels/:id/scan", s.scanMedia)
 		api.GET("/channels/:id/playlists", s.getPlaylists)
-		//api.GET("/channels/:id/playlists/:playlistId", s.getPlaylist)
+		api.GET("/channels/:id/playlists/:playlistId", s.getPlaylist)
 		api.GET("/channels/:id/media", s.getMediaFiles)
 		api.POST("/overlays", s.createOverlay)
 	}
@@ -88,10 +88,16 @@ func (s *Server) getChannel(c *gin.Context) {
 func (s *Server) listChannels(c *gin.Context) {
 	channels, err := s.channelService.GetAllChannels(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusOK, gin.H{
+			"channels": []*models.Channel{},
+			"error":    err.Error(),
+		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"channels": channels})
+	c.JSON(http.StatusOK, gin.H{
+		"channels": channels,
+		"error":    nil,
+	})
 }
 
 func (s *Server) startChannel(c *gin.Context) {
@@ -131,14 +137,70 @@ func (s *Server) channelStatus(c *gin.Context) {
 		return
 	}
 
-	running, err := s.channelService.CheckChannelStatus(c.Request.Context(), id)
+	// Get the channel to ensure it exists
+	channel, err := s.channelService.GetChannel(c.Request.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "channel not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	// Get comprehensive status information
+	state, isStreamerRunning, err := s.channelService.GetChannelStatus(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"running": running})
+	// Prepare response with detailed status information
+	statusResponse := gin.H{
+		"channel_id":       channel.ChannelID,
+		"name":             channel.ChannelName,
+		"running":          state.Running && isStreamerRunning, // Only true if both DB state and actual streamer are running
+		"current_position": state.CurrentPosition,
+		"last_update_time": state.LastUpdateTime,
+		"ffmpeg_pid":       state.FFmpegPID,
+	}
+
+	// If we have playlist information and a currently playing item, add it
+	if state.CurrentPlaylistID > 0 {
+		statusResponse["current_playlist_id"] = state.CurrentPlaylistID
+
+		// Try to get playlist name if available
+		playlist, _ := s.PlaylistExecutor.GetPlaylist(c.Request.Context(), state.CurrentPlaylistID)
+		if playlist != nil {
+			statusResponse["playlist_name"] = playlist.PlaylistName
+		}
+	}
+
+	if state.CurrentItemID > 0 {
+		statusResponse["current_item_id"] = state.CurrentItemID
+
+		// Could add logic here to get the current item's details if needed
+	}
+
+	c.JSON(http.StatusOK, statusResponse)
 }
+
+// func (s *Server) channelStatus(c *gin.Context) {
+// 	id, err := strconv.Atoi(c.Param("id"))
+// 	if err != nil {
+// 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel ID"})
+// 		return
+// 	}
+
+// 	running, err := s.channelService.CheckChan
+// nelStatus(c.Request.Context(), id)
+// 	if err != nil {
+// 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+// 		return
+// 	}
+
+// 	c.JSON(http.StatusOK, gin.H{"running": running})
+// }
 
 func (s *Server) Start(addr string) error {
 	return s.router.Run(addr)

@@ -202,6 +202,7 @@ func (r *Repository) UpdateChannelState(ctx context.Context, state *models.Chann
 	// Use NamedExecContext to automatically map struct fields to named parameters
 
 	_, err := r.db.NamedExecContext(ctx, query, state)
+
 	if err != nil {
 		return fmt.Errorf("failed to update channel state: %w", err)
 	}
@@ -359,7 +360,6 @@ func (r *Repository) GetPlaylistItems(ctx context.Context, playlistID int) ([]*m
 
 	var items []*models.PlaylistItem
 	err := r.db.SelectContext(ctx, &items, query, playlistID)
-	fmt.Println("Error : ", err)
 	if err != nil {
 		return nil, err
 	}
@@ -407,9 +407,6 @@ func (r *Repository) CreateOverlay(ctx context.Context, overlay *models.Overlay)
 /*New Func*/
 
 func (r *Repository) GetPlaylistForDate(ctx context.Context, channelID int, PlaylistDate time.Time) (*models.Playlist, error) {
-	//now := time.Now()
-	//today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	fmt.Println("Playlist Date", PlaylistDate.Format("2006-01-02"))
 	var playlist models.Playlist
 	query := `SELECT * FROM playlists 
               WHERE channel_id = ? 
